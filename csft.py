@@ -113,7 +113,6 @@ def updateFollowersCounts():
         dataWorksheet.update_row(handle.row, [profile.followers, datetime.now().strftime('%d-%m-%Y %H:%M:%S')], followers_col - 1)
         logging.info('Updating {}, followers: {}'.format(handle.value_unformatted, profile.followers))
     logging.info('Finished.')
-    return instaHandles
 
 
 ## RUN ONCE BEFORE SCHEDULE LOOP STARTS
@@ -131,4 +130,4 @@ if recheck_periodically:
         logging.debug('Checking for pending jobs.')
         schedule.run_pending()
 else:
-    logging.info('RECHECK_PERIODICALLY set to false, exiting.')
+    logging.info('recheck_periodically set to false, exiting.')
