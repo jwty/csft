@@ -2,11 +2,13 @@
 sheet_name = ''
 worksheet_name = ''
 instagram_col = 1
-followers_col = 2
-timestamp_col = 3
+insta_uid_col = 2
+followers_col = 3
+timestamp_col = 4
 recheck_periodically = true
 minutes_interval = 15
 
 [archive]
+archive = true
 archive_name = ''
 force_update = false

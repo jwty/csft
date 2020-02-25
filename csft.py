@@ -8,7 +8,7 @@ import toml
 
 
 ## SETTINGS
-__version__ = '1.3 "low speed high drag"'
+__version__ = '2.0 "low speed high drag"'
 config = toml.load('config.toml')
 for key, value in config['base'].items():
     globals()[key] = value
@@ -33,39 +33,82 @@ except:
 
 
 ## INSTALOADER INSTANCE
-loader = instaloader.Instaloader()
+loader = instaloader.Instaloader(sleep=False)
 
 
 ## OPEN SHEETS
-def openSheet():
+try:
+    sheet = sheetsClient.open(sheet_name)
+except pygsheets.exceptions.SpreadsheetNotFound:
+    logging.critical('Sheet "{}" not found - check config!'.format(sheet_name))
+    raise SystemExit(0)
+try:
+    dataWorksheet = sheet.worksheet_by_title(worksheet_name)
+except pygsheets.exceptions.WorksheetNotFound:
+    logging.critical('Worksheet "{}" not found - check config!'.format(worksheet_name))
+    raise SystemExit(0)
+
+
+## UPDATE FOLLOWER COUNTS AND UIDS
+def updateFollowerCount(handleCell, timestamp, followers):
     try:
-        sheet = sheetsClient.open(sheet_name)
-    except pygsheets.exceptions.SpreadsheetNotFound:
-        logging.critical('Sheet "{}" not found - check config!'.format(sheet_name))
-        raise SystemExit(0)
-    return sheet
-def openDataSheet():
-    sheet = openSheet()
+        currentTimestamp = datetime.strptime(timestamp, '%d-%m-%Y %H:%M:%S')
+    except ValueError:
+        currentTimestamp = datetime.min
+    if currentTimestamp + timedelta(days=1) > datetime.now():
+        return
+    logging.info('Updating {}, followers: {}'.format(handleCell.value_unformatted, followers))
+    dataWorksheet.update_row(handleCell.row, [followers, datetime.now().strftime('%d-%m-%Y %H:%M:%S')], followers_col - 1)
+
+def getHandleByUID(handleCell, UID):
     try:
-        dataWorksheet = sheet.worksheet_by_title(worksheet_name)
-    except pygsheets.exceptions.WorksheetNotFound:
-        logging.critical('Worksheet "{}" not found - check config!'.format(worksheet_name))
-        raise SystemExit(0)
-    return dataWorksheet
+        profileHandle = instaloader.Profile.from_id(loader.context, UID).username
+    except instaloader.exceptions.ProfileNotExistsException:
+        return False
+    return profileHandle
+
+def update():
+    logging.info('Starting update.')
+    instaHandleCells = dataWorksheet.get_col(instagram_col, returnas='cell', include_tailing_empty=False)[1:]
+    UIDCells = dataWorksheet.get_col(insta_uid_col, returnas='cell')[1:]
+    timestamps = dataWorksheet.get_col(timestamp_col)[1:]
+    for i, handle in enumerate(instaHandleCells):
+        if not handle.value_unformatted == handle.value_unformatted.strip():
+            handle.set_value(handle.value_unformatted.strip()) # yolostrip unnecessary whitespaces
+            logging.warning('Stripped whitespaces from "{}" - check sheet!'.format(handle.value_unformatted))
+        try:
+            profile = instaloader.Profile.from_username(loader.context, handle.value_unformatted)
+        except instaloader.exceptions.ProfileNotExistsException:
+            if str(UIDCells[i].value_unformatted).isnumeric():
+                logging.warning('Profile "{}" does not exist! Checking via UID.'.format(handle.value_unformatted))
+            else:
+                logging.warning('Profile "{}" does not exist and UID is invalid - skipping.'.format(handle.value_unformatted))
+                continue
+            newHandle = getHandleByUID(handle, UIDCells[i].value_unformatted)
+            if newHandle:
+                logging.info('New handle found, updating sheet with "{}".'.format(newHandle))
+                handle.set_value(newHandle)
+            else:
+                logging.warning('Profile ID "{}" does not exist - skipping.'.format(UIDCells[i].value_unformatted))
+                continue
+        updateFollowerCount(handle, timestamps[i], profile.followers)
+        if not UIDCells[i].value_unformatted:
+            logging.info('Updating UID for handle "{}".'.format(handle.value_unformatted))
+            UIDCells[i].set_value(profile.userid)
+    logging.info('Finished.')
 
 
 ## STORE OLD FOLLOWERS DATA
 def storeOldData():
-    sheet = openSheet()
     try:
         archiveWorksheet = sheet.worksheet_by_title(archive_name)
     except pygsheets.exceptions.WorksheetNotFound:
         logging.critical('Archive worksheet "{}" not found - not archiving!'.format(archive_name))
         return -1
-    dataWorksheet = openDataSheet()
+    logging.info('Storing old data to archive sheet.')
     instaHandles = dataWorksheet.get_col(instagram_col, include_tailing_empty=False)[1:]
-    today = date.today().strftime('%d-%m-%Y')
     followerCounts = dataWorksheet.get_col(followers_col, include_tailing_empty=False)[1:]
+    today = date.today().strftime('%d-%m-%Y')
     for i, row in enumerate(followerCounts):
         followerCounts[i] = row.replace(',','') # because get_col() gets formatted values
         if not followerCounts[i].isnumeric():
@@ -83,48 +126,21 @@ def storeOldData():
             logging.warning('"force_update" enabled - overwriting stored data!')
             currentArchiveColIndex =  len(columnHeaders)
     archiveWorksheet.update_col(currentArchiveColIndex, followersColumn)
-
-
-## UPDATE FOLLOWERS COUNTS
-def updateFollowersCounts():
-    logging.info('Updating followers count.')
-    dataWorksheet = openDataSheet()
-    instaHandles = dataWorksheet.get_col(instagram_col, returnas='cell', include_tailing_empty=False)
-    instaHandles = instaHandles[1:] # strip column header
-    timestamps = dataWorksheet.get_col(timestamp_col)[1:] # too much read requests fix
-    for i, handle in enumerate(instaHandles):
-        if not handle.value_unformatted == handle.value_unformatted.strip():
-            handle.set_value(handle.value_unformatted.strip()) # yolostrip unnecessary whitespaces
-            logging.warning('Stripped whitespaces from "{}" - check sheet!'.format(handle.value_unformatted))
-        currentTimestamp = timestamps[i]
-        try:
-            currentTimestamp = datetime.strptime(currentTimestamp, '%d-%m-%Y %H:%M:%S') # convert to datetime object
-        except ValueError:
-            currentTimestamp = datetime.min
-        if currentTimestamp + timedelta(days=1) > datetime.now():
-            logging.debug('Skipping {}'.format(handle.value_unformatted))
-            continue
-        try:
-            profile = instaloader.Profile.from_username(loader.context, handle.value_unformatted)
-        except instaloader.exceptions.ProfileNotExistsException:
-            logging.warning(r'Profile "{}" does not exist.'.format(handle.value_unformatted))
-            handle.neighbour((0,followers_col - instagram_col)).set_value('ERR: does not exist')
-            continue
-        dataWorksheet.update_row(handle.row, [profile.followers, datetime.now().strftime('%d-%m-%Y %H:%M:%S')], followers_col - 1)
-        logging.info('Updating {}, followers: {}'.format(handle.value_unformatted, profile.followers))
-    logging.info('Finished.')
+    logging.info('Finished')
 
 
 ## RUN ONCE BEFORE SCHEDULE LOOP STARTS
-updateFollowersCounts()
-storeOldData()
+update()
+if archive:
+    storeOldData()
 
 
 ## SCHEDULE LOOP
 if recheck_periodically:
     logging.info('Checking for updates every {} minutes. Zzz...'.format(minutes_interval))
-    schedule.every(minutes_interval).minutes.do(updateFollowersCounts)
-    schedule.every().day.at('23:30').do(storeOldData)
+    schedule.every(minutes_interval).minutes.do(update)
+    if archive:
+        schedule.every().day.at('23:30').do(storeOldData)
     while True:
         time.sleep(minutes_interval * 30)
         logging.debug('Checking for pending jobs.')
