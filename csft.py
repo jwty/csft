@@ -8,8 +8,8 @@ import toml
 
 
 ## SETTINGS
-__version__ = '2.0 "low speed high drag"'
-config = toml.load('config.toml')
+__version__ = '2.1 "low speed high drag"'
+config = toml.load('config-dev.toml')
 for key, value in config['base'].items():
     globals()[key] = value
 for key, value in config['archive'].items():
@@ -33,7 +33,7 @@ except:
 
 
 ## INSTALOADER INSTANCE
-loader = instaloader.Instaloader(sleep=False)
+loader = instaloader.Instaloader()
 
 
 ## OPEN SHEETS
@@ -50,13 +50,7 @@ except pygsheets.exceptions.WorksheetNotFound:
 
 
 ## UPDATE FOLLOWER COUNTS AND UIDS
-def updateFollowerCount(handleCell, timestamp, followers):
-    try:
-        currentTimestamp = datetime.strptime(timestamp, '%d-%m-%Y %H:%M:%S')
-    except ValueError:
-        currentTimestamp = datetime.min
-    if currentTimestamp + timedelta(days=1) > datetime.now():
-        return
+def updateFollowerCount(handleCell, followers):
     logging.info('Updating {}, followers: {}'.format(handleCell.value_unformatted, followers))
     dataWorksheet.update_row(handleCell.row, [followers, datetime.now().strftime('%d-%m-%Y %H:%M:%S')], followers_col - 1)
 
@@ -73,6 +67,12 @@ def update():
     UIDCells = dataWorksheet.get_col(insta_uid_col, returnas='cell')[1:]
     timestamps = dataWorksheet.get_col(timestamp_col)[1:]
     for i, handle in enumerate(instaHandleCells):
+        try:
+            currentTimestamp = datetime.strptime(timestamps[i], '%d-%m-%Y %H:%M:%S')
+        except ValueError:
+            currentTimestamp = datetime.min
+        if currentTimestamp + timedelta(days=1) > datetime.now():
+            continue
         if not handle.value_unformatted == handle.value_unformatted.strip():
             handle.set_value(handle.value_unformatted.strip()) # yolostrip unnecessary whitespaces
             logging.warning('Stripped whitespaces from "{}" - check sheet!'.format(handle.value_unformatted))
@@ -91,7 +91,7 @@ def update():
             else:
                 logging.warning('Profile ID "{}" does not exist - skipping.'.format(UIDCells[i].value_unformatted))
                 continue
-        updateFollowerCount(handle, timestamps[i], profile.followers)
+        updateFollowerCount(handle, profile.followers)
         if not UIDCells[i].value_unformatted:
             logging.info('Updating UID for handle "{}".'.format(handle.value_unformatted))
             UIDCells[i].set_value(profile.userid)
